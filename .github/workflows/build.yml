@@ -1,13 +1,3 @@
-name: Cross-Compile PulseView for Windows (MinGW)
-
-on:
-  push:
-    branches: [ "master", "main" ]
-  pull_request:
-    branches: [ "master", "main" ]
-  # 允许手动触发
-  workflow_dispatch:
-
 jobs:
   build_docker_image:
     runs-on: ubuntu-latest
@@ -16,39 +6,52 @@ jobs:
     - name: ⬇️ Checkout Repository
       uses: actions/checkout@v4
       
-    # 步骤 1: 构建 Docker 镜像
-    - name: 🔨 Build Docker Image
-      id: docker_build
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        # 构建时使用特定的标签，例如 'pulseview-cc'
-        tags: pulseview-cc-mingw:latest
-        load: true # 构建后将镜像加载到运行器环境中
-        
-    # 步骤 2: 运行容器以触发最终的构建脚本
-    # 假设 'docker-pulseview-cc-mingw' 镜像在启动时会自动运行 cc-mingw.sh 并生成文件
-    # 警告：您需要确认该 Dockerfile 和入口点是否会自动启动构建过程。
-    - name: ⚙️ Run Container to Generate Artifacts
-      id: container_run
+    - name: 🔨 Attempt to Build MXE Stage (Stage 1)
+      id: mxe_build_attempt
+      # 尝试构建到 stage1，并给镜像打标签。
+      # 使用 '|| true' 确保即使构建失败，Job 也会继续执行下一步。
       run: |
-        # 运行容器，并将输出目录挂载到工作目录，以便提取文件
-        # 注意: 这部分依赖于原项目的 Dockerfile 和 cc-mingw.sh 如何设置输出
-        # 我们假设输出文件位于容器内的 /cc-mingw/ 目录
-        mkdir -p output_artifacts
+        echo "Attempting to build Docker stage1..."
+        docker build -t pulseview-stage1:fail-log --target stage1 . || true
+
+    - name: 📝 Extract Failed 'check' Build Log
+      id: extract_log
+      # 检查构建是否成功，如果不成功，则从失败的镜像中提取日志
+      run: |
+        LOG_FILE="check_failure.log"
+        LOG_PATH="/root/mxe-git/log/check_x86_64-w64-mingw32.static.posix"
+        ARTIFACT_DIR="extracted_logs"
         
-        # 运行容器，并将 /cc-mingw/output 挂载到 host 的 output_artifacts
-        # 如果原始项目的脚本在构建时直接生成文件到特定目录，这可能需要调整
-        docker run -v $(pwd)/output_artifacts:/cc-mingw/output pulseview-cc-mingw:latest
+        # 1. 尝试创建并启动临时容器（使用上一步的失败镜像）
+        CONTAINER_ID=$(docker create pulseview-stage1:fail-log)
+        if [ "$CONTAINER_ID" == "" ]; then
+          echo "::warning::Could not create temporary container. Skipping log extraction."
+          exit 0
+        fi
         
-        # 检查生成的文件
-        ls -l output_artifacts/
+        # 2. 从容器中复制日志文件
+        mkdir -p $ARTIFACT_DIR
+        if docker cp $CONTAINER_ID:$LOG_PATH $ARTIFACT_DIR/$LOG_FILE; then
+          echo "Log file copied successfully to $ARTIFACT_DIR/$LOG_FILE"
+          echo "LOG_EXTRACTED=true" >> $GITHUB_OUTPUT
+        else
+          echo "Log file $LOG_PATH was not found in the container. Build might have succeeded or failed elsewhere."
+        fi
         
-    # 步骤 3: 上传生成的 Windows 安装程序作为 Artifact
-    - name: ⬆️ Upload Windows Installer Artifact
+        # 3. 清理临时容器
+        docker rm $CONTAINER_ID
+
+    - name: ⬆️ Upload Failure Log Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: pulseview-windows-installer
-        # 假设生成的安装程序位于 output_artifacts 目录下
-        path: output_artifacts/*.exe
-        # 如果是多个文件，可以使用更具体的通配符
+        name: check-build-failure-log
+        # 确保只在日志文件存在时才上传
+        path: extracted_logs/check_failure.log
+        if-no-files-found: ignore
+
+    - name: 🛑 Fail Job if Log Was Extracted
+      # 只有当 LOG_EXTRACTED 为 true 时才运行此步骤，确保 Job 状态为失败
+      if: steps.extract_log.outputs.LOG_EXTRACTED == 'true'
+      run: |
+        echo "::error title=MXE Compilation Failed::The 'check' package failed to compile. See the uploaded 'check-build-failure-log' artifact for details."
+        exit 1
