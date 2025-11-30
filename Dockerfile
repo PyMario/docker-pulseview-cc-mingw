@@ -21,7 +21,7 @@ RUN patch -p1 < libusb1_upgrade.patch
 RUN make -j4 MXE_TARGETS=x86_64-w64-mingw32.static.posix MXE_USE_CCACHE= \
     MXE_PLUGIN_DIRS=plugins/examples/qt5-freeze \
     gcc glib libzip libusb1 libftdi1 hidapi glibmm qtbase qtimageformats \
-    qtsvg qttranslations boost check gendef libieee1284 \
+    qtsvg qttranslations boost gendef libieee1284 \
     qtbase_CONFIGURE_OPTS='-no-sql-mysql'
 
 FROM --platform=linux/amd64 debian:bookworm-slim AS stage2
