@@ -1,0 +1,54 @@
+name: Cross-Compile PulseView for Windows (MinGW)
+
+on:
+  push:
+    branches: [ "master", "main" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  build_docker_image:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: ⬇️ Checkout Repository
+      uses: actions/checkout@v4
+      
+    # 步骤 1: 构建 Docker 镜像
+    - name: 🔨 Build Docker Image
+      id: docker_build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        # 构建时使用特定的标签，例如 'pulseview-cc'
+        tags: pulseview-cc-mingw:latest
+        load: true # 构建后将镜像加载到运行器环境中
+        
+    # 步骤 2: 运行容器以触发最终的构建脚本
+    # 假设 'docker-pulseview-cc-mingw' 镜像在启动时会自动运行 cc-mingw.sh 并生成文件
+    # 警告：您需要确认该 Dockerfile 和入口点是否会自动启动构建过程。
+    - name: ⚙️ Run Container to Generate Artifacts
+      id: container_run
+      run: |
+        # 运行容器，并将输出目录挂载到工作目录，以便提取文件
+        # 注意: 这部分依赖于原项目的 Dockerfile 和 cc-mingw.sh 如何设置输出
+        # 我们假设输出文件位于容器内的 /cc-mingw/ 目录
+        mkdir -p output_artifacts
+        
+        # 运行容器，并将 /cc-mingw/output 挂载到 host 的 output_artifacts
+        # 如果原始项目的脚本在构建时直接生成文件到特定目录，这可能需要调整
+        docker run -v $(pwd)/output_artifacts:/cc-mingw/output pulseview-cc-mingw:latest
+        
+        # 检查生成的文件
+        ls -l output_artifacts/
+        
+    # 步骤 3: 上传生成的 Windows 安装程序作为 Artifact
+    - name: ⬆️ Upload Windows Installer Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: pulseview-windows-installer
+        # 假设生成的安装程序位于 output_artifacts 目录下
+        path: output_artifacts/*.exe
+        # 如果是多个文件，可以使用更具体的通配符
